@@ -13,17 +13,62 @@ env:
   BIN_NAME: wechat-agent
 
 jobs:
+  prepare-release:
+    name: prepare-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release notes body
+        run: |
+          cat > RELEASE_BODY.md << 'EOF'
+          ## wechat-agent
+
+          Cross-platform WeChat iLink CLI with pluggable agents.
+
+          ### Key Features
+          - QR login and multi-account support
+          - Long-polling message loop with resume cursor
+          - Agent backends: Claude/Codex/OpenClaw ACP, OpenAI, Anthropic
+          - Inbound/outbound logs and fallback reply behavior
+
+          ### Quick Start
+          ```bash
+          wechat-agent --login --agent codex
+          wechat-agent --agent claude --account <account_id>
+          ```
+
+          ### Package List
+          - macOS Intel DMG
+          - macOS Apple Silicon DMG
+          - Ubuntu 22.04/24.04 DEB (amd64)
+          - Ubuntu 24.04 DEB (arm64)
+          - Windows EXE (+ ZIP)
+          EOF
+
+      - name: Create or update release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          body_path: RELEASE_BODY.md
+          generate_release_notes: true
+
   linux-deb:
-    name: linux-deb (${{ matrix.ubuntu }})
-    runs-on: ${{ matrix.ubuntu }}
+    needs: [prepare-release]
+    name: linux-deb (${{ matrix.distro }}-${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - ubuntu: ubuntu-22.04
+          - runner: ubuntu-22.04
             distro: ubuntu22.04
-          - ubuntu: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04
             distro: ubuntu24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            distro: ubuntu24.04
+            arch: arm64
 
     steps:
       - name: Checkout
@@ -45,16 +90,25 @@ jobs:
         run: |
           mkdir -p dist
           VERSION="${GITHUB_REF_NAME#v}"
-          cargo deb --no-build --output "dist/${{ env.BIN_NAME }}_${VERSION}_${{ matrix.distro }}_amd64.deb"
+          cargo deb --no-build --output "dist/${{ env.BIN_NAME }}_${VERSION}_${{ matrix.distro }}_${{ matrix.arch }}.deb"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.distro }}-deb
+          name: ${{ matrix.distro }}-${{ matrix.arch }}-deb
           path: dist/*.deb
           if-no-files-found: error
 
+      - name: Publish deb to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/*.deb
+          fail_on_unmatched_files: true
+
   windows-exe:
+    needs: [prepare-release]
     name: windows-exe
     runs-on: windows-latest
     steps:
@@ -85,16 +139,25 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+      - name: Publish windows package to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: dist/*
+          fail_on_unmatched_files: true
+
   macos-dmg:
-    name: macos-dmg (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    needs: [prepare-release]
+    name: macos-dmg (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-13
+          - runner: macos-15-intel
             arch: x86_64
-          - os: macos-14
+          - runner: macos-14
             arch: arm64
 
     steps:
@@ -132,22 +195,10 @@ jobs:
           path: dist/*.dmg
           if-no-files-found: error
 
-  release:
-    name: github-release
-    needs: [linux-deb, windows-exe, macos-dmg]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-artifacts
-
-      - name: List artifacts
-        run: find release-artifacts -type f | sort
-
-      - name: Publish to GitHub Releases
+      - name: Publish dmg to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: release-artifacts/**/*
-          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+          files: dist/*.dmg
+          fail_on_unmatched_files: true

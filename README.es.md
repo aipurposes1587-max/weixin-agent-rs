@@ -92,11 +92,10 @@ ANTHROPIC_API_KEY=... wechat-agent --agent anthropic
 - `anthropic`: Anthropic Messages API
 - `acp`: adaptador ACP (Claude / Codex / Kimi, etc.)
 
-## CI
+## Contribuir
 
-Matriz de GitHub Actions:
-- Ubuntu
-- Windows
-- macOS
+Las issues y pull requests son bienvenidas.
 
-Workflow: `.github/workflows/ci.yml`
+## Licencia
+
+Este proyecto está bajo la licencia MIT. Consulta [LICENSE](./LICENSE).
