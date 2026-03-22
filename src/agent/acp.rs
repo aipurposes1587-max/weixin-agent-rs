@@ -48,6 +48,14 @@ struct SessionCollector {
     image_data: Option<(String, String)>,
 }
 
+#[derive(Debug, Clone)]
+struct TerminalState {
+    output: String,
+    truncated: bool,
+    exit_code: Option<i32>,
+    signal: Option<String>,
+}
+
 impl SessionCollector {
     fn new() -> Self {
         Self {
@@ -119,6 +127,7 @@ impl AcpAgent {
         let read_stdin_loop = Arc::clone(&read_stdin);
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
+            let mut terminals: HashMap<String, TerminalState> = HashMap::new();
             while let Ok(Some(line)) = lines.next_line().await {
                 let parsed: Result<JsonRpcEnvelope> = serde_json::from_str::<JsonRpcEnvelope>(&line)
                     .map_err(WechatError::from);
@@ -126,6 +135,57 @@ impl AcpAgent {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
+
+                // Agent -> Client session update may arrive as notification OR as request with id.
+                if envelope.method.as_deref() == Some("session/update") {
+                    let params = envelope.params.clone().unwrap_or(Value::Null);
+                    let session_id = params
+                        .get("sessionId")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let update = params.get("update").cloned().unwrap_or(Value::Null);
+                    let update_type = update
+                        .get("sessionUpdate")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+
+                    if update_type == "agent_message_chunk" {
+                        let content = update.get("content").cloned().unwrap_or(Value::Null);
+                        let kind = content.get("type").and_then(|v| v.as_str()).unwrap_or_default();
+                        let mut locked = read_collectors.lock().await;
+                        let collector = locked.entry(session_id).or_insert_with(SessionCollector::new);
+                        match kind {
+                            "text" => {
+                                if let Some(t) = content.get("text").and_then(|v| v.as_str()) {
+                                    collector.text_chunks.push_str(t);
+                                }
+                            }
+                            "image" => {
+                                let data = content.get("data").and_then(|v| v.as_str()).unwrap_or_default();
+                                let mime = content.get("mimeType").and_then(|v| v.as_str()).unwrap_or("image/png");
+                                collector.image_data = Some((data.to_string(), mime.to_string()));
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // If update was sent as request with id, ACK it.
+                    if let Some(id) = envelope.id {
+                        let reply = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {}
+                        });
+                        if let Ok(line) = serde_json::to_string(&reply) {
+                            let mut writer = read_stdin_loop.lock().await;
+                            let _ = writer.write_all(line.as_bytes()).await;
+                            let _ = writer.write_all(b"\n").await;
+                            let _ = writer.flush().await;
+                        }
+                    }
+                    continue;
+                }
 
                 if let (Some(id), Some(method)) = (envelope.id, envelope.method.clone()) {
                     // Agent -> Client request, handle known client methods.
@@ -159,6 +219,265 @@ impl AcpAgent {
                         }
                         continue;
                     }
+
+                    if method == "fs/read_text_file" {
+                        let path = envelope
+                            .params
+                            .as_ref()
+                            .and_then(|p| p.get("path"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+
+                        let reply = match std::fs::read_to_string(&path) {
+                            Ok(content) => json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": { "content": content }
+                            }),
+                            Err(err) => json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "error": { "code": -32000, "message": format!("fs/read_text_file failed: {}", err) }
+                            }),
+                        };
+
+                        if let Ok(line) = serde_json::to_string(&reply) {
+                            let mut writer = read_stdin_loop.lock().await;
+                            let _ = writer.write_all(line.as_bytes()).await;
+                            let _ = writer.write_all(b"\n").await;
+                            let _ = writer.flush().await;
+                        }
+                        continue;
+                    }
+
+                    if method == "fs/write_text_file" {
+                        let path = envelope
+                            .params
+                            .as_ref()
+                            .and_then(|p| p.get("path"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let content = envelope
+                            .params
+                            .as_ref()
+                            .and_then(|p| p.get("content"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+
+                        let reply = match std::fs::write(&path, content) {
+                            Ok(_) => json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {}
+                            }),
+                            Err(err) => json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "error": { "code": -32000, "message": format!("fs/write_text_file failed: {}", err) }
+                            }),
+                        };
+
+                        if let Ok(line) = serde_json::to_string(&reply) {
+                            let mut writer = read_stdin_loop.lock().await;
+                            let _ = writer.write_all(line.as_bytes()).await;
+                            let _ = writer.write_all(b"\n").await;
+                            let _ = writer.flush().await;
+                        }
+                        continue;
+                    }
+
+                    if method == "terminal/create" {
+                        let params = envelope.params.as_ref().cloned().unwrap_or(Value::Null);
+                        let command = params
+                            .get("command")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let args = params
+                            .get("args")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        let cwd = params.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        let output_byte_limit = params
+                            .get("outputByteLimit")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as usize);
+
+                        let mut cmd = tokio::process::Command::new(command);
+                        cmd.args(args);
+                        if let Some(c) = cwd {
+                            if !c.is_empty() {
+                                cmd.current_dir(c);
+                            }
+                        }
+                        if let Some(envs) = params.get("env").and_then(|v| v.as_array()) {
+                            for envv in envs {
+                                let name = envv.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+                                let value = envv.get("value").and_then(|v| v.as_str()).unwrap_or_default();
+                                if !name.is_empty() {
+                                    cmd.env(name, value);
+                                }
+                            }
+                        }
+                        cmd.stdin(std::process::Stdio::null());
+                        cmd.stdout(std::process::Stdio::piped());
+                        cmd.stderr(std::process::Stdio::piped());
+
+                        let reply = match cmd.output().await {
+                            Ok(out) => {
+                                let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+                                if !out.stderr.is_empty() {
+                                    text.push_str(&String::from_utf8_lossy(&out.stderr));
+                                }
+                                let (text, truncated) = truncate_to_bytes_tail(text, output_byte_limit);
+                                let terminal_id = uuid::Uuid::new_v4().to_string();
+                                terminals.insert(
+                                    terminal_id.clone(),
+                                    TerminalState {
+                                        output: text,
+                                        truncated,
+                                        exit_code: out.status.code(),
+                                        signal: None,
+                                    },
+                                );
+                                json!({
+                                    "jsonrpc": "2.0",
+                                    "id": id,
+                                    "result": { "terminalId": terminal_id }
+                                })
+                            }
+                            Err(err) => json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "error": { "code": -32000, "message": format!("terminal/create failed: {}", err) }
+                            }),
+                        };
+
+                        if let Ok(line) = serde_json::to_string(&reply) {
+                            let mut writer = read_stdin_loop.lock().await;
+                            let _ = writer.write_all(line.as_bytes()).await;
+                            let _ = writer.write_all(b"\n").await;
+                            let _ = writer.flush().await;
+                        }
+                        continue;
+                    }
+
+                    if method == "terminal/output" {
+                        let terminal_id = envelope
+                            .params
+                            .as_ref()
+                            .and_then(|p| p.get("terminalId"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let state = terminals.get(&terminal_id);
+                        let reply = if let Some(s) = state {
+                            json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {
+                                    "output": s.output,
+                                    "truncated": s.truncated,
+                                    "exitStatus": {
+                                        "exitCode": s.exit_code,
+                                        "signal": s.signal
+                                    }
+                                }
+                            })
+                        } else {
+                            json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "error": { "code": -32000, "message": "terminal not found" }
+                            })
+                        };
+                        if let Ok(line) = serde_json::to_string(&reply) {
+                            let mut writer = read_stdin_loop.lock().await;
+                            let _ = writer.write_all(line.as_bytes()).await;
+                            let _ = writer.write_all(b"\n").await;
+                            let _ = writer.flush().await;
+                        }
+                        continue;
+                    }
+
+                    if method == "terminal/wait_for_exit" {
+                        let terminal_id = envelope
+                            .params
+                            .as_ref()
+                            .and_then(|p| p.get("terminalId"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let state = terminals.get(&terminal_id);
+                        let reply = if let Some(s) = state {
+                            json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {
+                                    "exitCode": s.exit_code,
+                                    "signal": s.signal
+                                }
+                            })
+                        } else {
+                            json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "error": { "code": -32000, "message": "terminal not found" }
+                            })
+                        };
+                        if let Ok(line) = serde_json::to_string(&reply) {
+                            let mut writer = read_stdin_loop.lock().await;
+                            let _ = writer.write_all(line.as_bytes()).await;
+                            let _ = writer.write_all(b"\n").await;
+                            let _ = writer.flush().await;
+                        }
+                        continue;
+                    }
+
+                    if method == "terminal/kill" || method == "terminal/release" {
+                        let terminal_id = envelope
+                            .params
+                            .as_ref()
+                            .and_then(|p| p.get("terminalId"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        terminals.remove(&terminal_id);
+                        let reply = json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {}
+                        });
+                        if let Ok(line) = serde_json::to_string(&reply) {
+                            let mut writer = read_stdin_loop.lock().await;
+                            let _ = writer.write_all(line.as_bytes()).await;
+                            let _ = writer.write_all(b"\n").await;
+                            let _ = writer.flush().await;
+                        }
+                        continue;
+                    }
+
+                    // Unknown inbound request: reply method-not-found to avoid deadlock.
+                    let reply = json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32601, "message": format!("Method not found: {}", method) }
+                    });
+                    if let Ok(line) = serde_json::to_string(&reply) {
+                        let mut writer = read_stdin_loop.lock().await;
+                        let _ = writer.write_all(line.as_bytes()).await;
+                        let _ = writer.write_all(b"\n").await;
+                        let _ = writer.flush().await;
+                    }
+                    continue;
                 }
 
                 if let Some(id) = envelope.id {
@@ -176,39 +495,6 @@ impl AcpAgent {
                     continue;
                 }
 
-                if envelope.method.as_deref() == Some("session/update") {
-                    let params = envelope.params.unwrap_or(Value::Null);
-                    let session_id = params
-                        .get("sessionId")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let update = params.get("update").cloned().unwrap_or(Value::Null);
-                    let update_type = update
-                        .get("sessionUpdate")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default();
-
-                    if update_type == "agent_message_chunk" {
-                        let content = update.get("content").cloned().unwrap_or(Value::Null);
-                        let kind = content.get("type").and_then(|v| v.as_str()).unwrap_or_default();
-                        let mut locked = read_collectors.lock().await;
-                        let collector = locked.entry(session_id).or_insert_with(SessionCollector::new);
-                        match kind {
-                            "text" => {
-                                if let Some(t) = content.get("text").and_then(|v| v.as_str()) {
-                                    collector.text_chunks.push_str(t);
-                                }
-                            }
-                            "image" => {
-                                let data = content.get("data").and_then(|v| v.as_str()).unwrap_or_default();
-                                let mime = content.get("mimeType").and_then(|v| v.as_str()).unwrap_or("image/png");
-                                collector.image_data = Some((data.to_string(), mime.to_string()));
-                            }
-                            _ => {}
-                        }
-                    }
-                }
             }
         });
 
@@ -407,6 +693,22 @@ impl AcpAgent {
 
         Ok(response)
     }
+}
+
+fn truncate_to_bytes_tail(input: String, limit: Option<usize>) -> (String, bool) {
+    let Some(max) = limit else {
+        return (input, false);
+    };
+    let bytes = input.as_bytes();
+    if bytes.len() <= max {
+        return (input, false);
+    }
+    let start = bytes.len().saturating_sub(max);
+    let mut idx = start;
+    while idx < bytes.len() && !input.is_char_boundary(idx) {
+        idx += 1;
+    }
+    (input[idx..].to_string(), true)
 }
 
 #[async_trait]
