@@ -3,7 +3,7 @@
 ![CI](https://github.com/tianrking/weixin-agent-rs/actions/workflows/ci.yml/badge.svg)
 ![Rust](https://img.shields.io/badge/Rust-1.78%2B-orange)
 ![License](https://img.shields.io/badge/License-MIT-blue)
-![Version](https://img.shields.io/badge/Version-v0.0.1-brightgreen)
+![Release](https://img.shields.io/github/v/release/tianrking/weixin-agent-rs?sort=semver)
 
 一个现代化的 Rust WeChat iLink Bot SDK，支持可插拔 Agent，并内置统一启动器 `wechat-agent`。
 
@@ -11,6 +11,14 @@
 - 中文（默认）：`README.md`
 - English: [README.en.md](./README.en.md)
 - Español: [README.es.md](./README.es.md)
+
+## 项目亮点
+
+- 一条命令接入 Agent：`claude` / `codex` / `openclaw` / `openai` / `anthropic`
+- 终端与手机双视角可观测：扫码、入站日志、出站日志、回退回复全链路可见
+- 多账号可靠运行：支持强制 `--account`，避免旧 token 干扰
+- 发布即分发：各平台构建成功后立即上传 Release，不被单点失败阻塞
+- 跨平台交付：macOS、Windows、Ubuntu `.deb` 与 Linux 可移植 `tar.gz` 同步提供
 
 ## 效果预览
 
@@ -80,6 +88,11 @@ wechat-agent --login --agent codex
 - macOS Apple Silicon: `wechat-agent-<version>-macos-arm64.dmg`
 - Ubuntu 22.04: `wechat-agent_<version>_ubuntu22.04_amd64.deb`
 - Ubuntu 24.04: `wechat-agent_<version>_ubuntu24.04_amd64.deb`
+- Ubuntu 24.04 ARM64: `wechat-agent_<version>_ubuntu24.04_arm64.deb`
+- Linux GNU x86_64: `wechat-agent-<version>-linux-gnu-x86_64.tar.gz`
+- Linux GNU arm64: `wechat-agent-<version>-linux-gnu-arm64.tar.gz`
+- Linux MUSL x86_64: `wechat-agent-<version>-linux-musl-x86_64.tar.gz`
+- Linux MUSL arm64: `wechat-agent-<version>-linux-musl-arm64.tar.gz`
 - Windows: `wechat-agent-<version>-windows-x86_64.exe`
 
 ## 一条命令接入本地 Agent

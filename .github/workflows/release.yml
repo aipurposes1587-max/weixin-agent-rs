@@ -41,6 +41,7 @@ jobs:
           - macOS Apple Silicon DMG
           - Ubuntu 22.04/24.04 DEB (amd64)
           - Ubuntu 24.04 DEB (arm64)
+          - Linux portable tar.gz (gnu/musl, x86_64/arm64)
           - Windows EXE (+ ZIP)
           EOF
 
@@ -105,6 +106,63 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: dist/*.deb
+          fail_on_unmatched_files: true
+
+  linux-portable:
+    needs: [prepare-release]
+    name: linux-portable (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            pkg: linux-gnu-x86_64
+          - target: aarch64-unknown-linux-gnu
+            pkg: linux-gnu-arm64
+          - target: x86_64-unknown-linux-musl
+            pkg: linux-musl-x86_64
+          - target: aarch64-unknown-linux-musl
+            pkg: linux-musl-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build with cross
+        uses: houseabsolute/actions-rust-cross@v1
+        with:
+          command: build
+          target: ${{ matrix.target }}
+          args: "--release --bin ${{ env.BIN_NAME }}"
+          strip: true
+
+      - name: Package tarball
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          VERSION="${GITHUB_REF_NAME#v}"
+          PKG_BASE="${BIN_NAME}-${VERSION}-${{ matrix.pkg }}"
+          cp "target/${{ matrix.target }}/release/${BIN_NAME}" "dist/${PKG_BASE}"
+          chmod +x "dist/${PKG_BASE}"
+          tar -C dist -czf "dist/${PKG_BASE}.tar.gz" "${PKG_BASE}"
+          sha256sum "dist/${PKG_BASE}.tar.gz" > "dist/${PKG_BASE}.tar.gz.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.pkg }}-tarball
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish portable package to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
           fail_on_unmatched_files: true
 
   windows-exe:

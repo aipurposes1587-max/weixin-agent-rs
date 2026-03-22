@@ -3,7 +3,7 @@
 ![CI](https://github.com/tianrking/weixin-agent-rs/actions/workflows/ci.yml/badge.svg)
 ![Rust](https://img.shields.io/badge/Rust-1.78%2B-orange)
 ![License](https://img.shields.io/badge/License-MIT-blue)
-![Version](https://img.shields.io/badge/Version-v0.0.1-brightgreen)
+![Release](https://img.shields.io/github/v/release/tianrking/weixin-agent-rs?sort=semver)
 
 SDK moderno en Rust para WeChat iLink con interfaz de Agente extensible y lanzador unificado (`wechat-agent`).
 
@@ -40,6 +40,11 @@ Descarga los paquetes por plataforma desde Releases:
 - macOS Apple Silicon: `wechat-agent-<version>-macos-arm64.dmg`
 - Ubuntu 22.04: `wechat-agent_<version>_ubuntu22.04_amd64.deb`
 - Ubuntu 24.04: `wechat-agent_<version>_ubuntu24.04_amd64.deb`
+- Ubuntu 24.04 ARM64: `wechat-agent_<version>_ubuntu24.04_arm64.deb`
+- Linux GNU x86_64: `wechat-agent-<version>-linux-gnu-x86_64.tar.gz`
+- Linux GNU arm64: `wechat-agent-<version>-linux-gnu-arm64.tar.gz`
+- Linux MUSL x86_64: `wechat-agent-<version>-linux-musl-x86_64.tar.gz`
+- Linux MUSL arm64: `wechat-agent-<version>-linux-musl-arm64.tar.gz`
 - Windows: `wechat-agent-<version>-windows-x86_64.exe`
 
 ## Un Comando Para Agentes Locales
