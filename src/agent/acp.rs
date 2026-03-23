@@ -75,6 +75,7 @@ struct Inner {
     _child: Child,
 }
 
+#[derive(Clone)]
 pub struct AcpAgent {
     inner: Arc<Mutex<Inner>>,
 }
@@ -692,6 +693,35 @@ impl AcpAgent {
         }
 
         Ok(response)
+    }
+
+    pub async fn session_count(&self) -> usize {
+        let inner = self.inner.lock().await;
+        inner.session_by_conversation.len()
+    }
+
+    pub async fn session_ids(&self) -> Vec<String> {
+        let inner = self.inner.lock().await;
+        inner
+            .session_by_conversation
+            .iter()
+            .map(|(conversation_id, session_id)| format!("{conversation_id}:{session_id}"))
+            .collect()
+    }
+
+    pub async fn reset_conversation(&self, conversation_id: &str) {
+        let mut inner = self.inner.lock().await;
+        inner.session_by_conversation.remove(conversation_id);
+    }
+
+    pub async fn reset_all_conversations(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.session_by_conversation.clear();
+    }
+
+    pub async fn shutdown(&self) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        inner._child.kill().await.map_err(WechatError::from)
     }
 }
 

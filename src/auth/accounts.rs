@@ -24,6 +24,15 @@ pub struct ResolvedAccount {
     pub token: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct StoredAccount {
+    pub account_id: String,
+    pub has_token: bool,
+    pub base_url: Option<String>,
+    pub user_id: Option<String>,
+    pub saved_at: Option<String>,
+}
+
 fn weixin_dir() -> PathBuf {
     resolve_state_dir().join("openclaw-weixin")
 }
@@ -60,6 +69,26 @@ pub fn list_account_ids() -> Vec<String> {
     serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default()
 }
 
+pub fn list_accounts() -> Vec<StoredAccount> {
+    list_account_ids()
+        .into_iter()
+        .filter_map(|account_id| {
+            let data = load_account(&account_id)?;
+            Some(StoredAccount {
+                account_id,
+                has_token: data
+                    .token
+                    .as_ref()
+                    .map(|v| !v.trim().is_empty())
+                    .unwrap_or(false),
+                base_url: data.base_url,
+                user_id: data.user_id,
+                saved_at: data.saved_at,
+            })
+        })
+        .collect()
+}
+
 pub fn load_account(account_id: &str) -> Option<AccountData> {
     let raw = fs::read_to_string(account_path(account_id)).ok()?;
     serde_json::from_str(&raw).ok()
@@ -72,6 +101,22 @@ pub fn save_account(account_id: &str, mut data: AccountData) -> std::io::Result<
         account_path(account_id),
         serde_json::to_vec_pretty(&data).unwrap_or_default(),
     )
+}
+
+pub fn delete_account(account_id: &str) -> std::io::Result<()> {
+    let normalized = normalize_account_id(account_id);
+    let path = account_path(&normalized);
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+
+    let mut ids = list_account_ids();
+    let original_len = ids.len();
+    ids.retain(|v| v != &normalized);
+    if ids.len() != original_len {
+        fs::write(index_path(), serde_json::to_vec_pretty(&ids).unwrap_or_default())?;
+    }
+    Ok(())
 }
 
 fn chrono_like_timestamp() -> String {

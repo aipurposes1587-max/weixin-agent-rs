@@ -44,3 +44,4 @@ uuid = { version = "1", features = ["v4"] }
 futures = "0.3"
 tokio-stream = "0.1"
 qrcode = "0.14"
+sysinfo = "0.37"

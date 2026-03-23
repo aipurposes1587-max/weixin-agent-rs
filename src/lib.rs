@@ -7,6 +7,8 @@ pub mod error;
 pub mod media;
 pub mod messaging;
 pub mod monitor;
+pub mod runtime;
+pub mod space;
 pub mod storage;
 pub mod util;
 

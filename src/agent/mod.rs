@@ -1,6 +1,7 @@
 pub mod acp;
 
 use async_trait::async_trait;
+use std::sync::Arc;
 
 use crate::error::Result;
 
@@ -50,4 +51,14 @@ pub enum MediaOutKind {
 #[async_trait]
 pub trait Agent: Send + Sync {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse>;
+}
+
+#[async_trait]
+impl<T> Agent for Arc<T>
+where
+    T: Agent + ?Sized,
+{
+    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+        (**self).chat(request).await
+    }
 }

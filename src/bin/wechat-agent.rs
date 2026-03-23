@@ -1,348 +1,569 @@
-use async_trait::async_trait;
-use serde_json::json;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::fs::OpenOptions;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::PathBuf;
+use std::process::Stdio;
 use std::time::Duration;
-use tokio::sync::Mutex;
-use wechat_rs_sdk::agent::acp::{AcpAgent, AcpAgentOptions};
-use wechat_rs_sdk::{Agent, Bot, ChatRequest, ChatResponse, LoginOptions, Result, StartOptions};
 
-#[derive(Clone)]
-struct OpenAIAgent {
-    client: reqwest::Client,
-    api_key: String,
-    base_url: String,
-    model: String,
-    system_prompt: Option<String>,
-    history: Arc<Mutex<HashMap<String, Vec<serde_json::Value>>>>,
-}
-
-#[async_trait]
-impl Agent for OpenAIAgent {
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        let mut msg = Vec::new();
-        if !request.text.trim().is_empty() {
-            msg.push(json!({"type":"text","text":request.text}));
-        }
-        if let Some(media) = &request.media {
-            if matches!(media.kind, wechat_rs_sdk::MediaKind::Image) {
-                let bytes = tokio::fs::read(&media.file_path).await?;
-                let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
-                msg.push(json!({"type":"image_url","image_url":{"url":format!("data:{};base64,{}", media.mime_type, b64)}}));
-            }
-        }
-
-        let mut history = self.history.lock().await;
-        let conv = history.entry(request.conversation_id.clone()).or_default();
-        conv.push(json!({"role":"user","content":msg}));
-
-        let mut messages = Vec::new();
-        if let Some(system) = &self.system_prompt {
-            messages.push(json!({"role":"system","content":system}));
-        }
-        messages.extend(conv.clone());
-
-        let body = json!({
-            "model": self.model,
-            "messages": messages,
-        });
-
-        let resp = self
-            .client
-            .post(format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/')))
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await?;
-
-        let status = resp.status();
-        let value: serde_json::Value = resp.json().await?;
-        if !status.is_success() {
-            return Err(wechat_rs_sdk::WechatError::Api(format!("openai error {status}: {}", value)));
-        }
-
-        let reply = value
-            .pointer("/choices/0/message/content")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-
-        conv.push(json!({"role":"assistant","content":reply}));
-
-        Ok(ChatResponse {
-            text: Some(reply),
-            media: None,
-        })
-    }
-}
-
-#[derive(Clone)]
-struct AnthropicAgent {
-    client: reqwest::Client,
-    api_key: String,
-    base_url: String,
-    model: String,
-    system_prompt: Option<String>,
-    history: Arc<Mutex<HashMap<String, Vec<serde_json::Value>>>>,
-}
-
-#[async_trait]
-impl Agent for AnthropicAgent {
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        let mut user_content = Vec::new();
-        if !request.text.trim().is_empty() {
-            user_content.push(json!({"type":"text","text":request.text}));
-        }
-        if let Some(media) = &request.media {
-            if matches!(media.kind, wechat_rs_sdk::MediaKind::Image) {
-                let bytes = tokio::fs::read(&media.file_path).await?;
-                let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
-                user_content.push(json!({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media.mime_type,
-                        "data": b64
-                    }
-                }));
-            }
-        }
-
-        let mut history = self.history.lock().await;
-        let conv = history.entry(request.conversation_id.clone()).or_default();
-        conv.push(json!({"role":"user","content":user_content}));
-
-        let body = json!({
-            "model": self.model,
-            "max_tokens": 2048,
-            "messages": conv,
-            "system": self.system_prompt,
-        });
-
-        let resp = self
-            .client
-            .post(format!("{}/v1/messages", self.base_url.trim_end_matches('/')))
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .json(&body)
-            .send()
-            .await?;
-
-        let status = resp.status();
-        let value: serde_json::Value = resp.json().await?;
-        if !status.is_success() {
-            return Err(wechat_rs_sdk::WechatError::Api(format!("anthropic error {status}: {}", value)));
-        }
-
-        let reply = value
-            .pointer("/content/0/text")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-
-        conv.push(json!({"role":"assistant","content":[{"type":"text","text":reply}]}));
-
-        Ok(ChatResponse {
-            text: Some(reply),
-            media: None,
-        })
-    }
-}
-
-struct EchoAgent;
-
-#[async_trait]
-impl Agent for EchoAgent {
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        Ok(ChatResponse {
-            text: Some(format!("你说了: {}", request.text)),
-            media: None,
-        })
-    }
-}
-
-enum HubAgent {
-    Echo(EchoAgent),
-    Acp(AcpAgent),
-    OpenAI(OpenAIAgent),
-    Anthropic(AnthropicAgent),
-}
-
-#[async_trait]
-impl Agent for HubAgent {
-    async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        match self {
-            HubAgent::Echo(v) => v.chat(request).await,
-            HubAgent::Acp(v) => v.chat(request).await,
-            HubAgent::OpenAI(v) => v.chat(request).await,
-            HubAgent::Anthropic(v) => v.chat(request).await,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct Cli {
-    login: bool,
-    agent: String,
-    account_id: Option<String>,
-    acp_command: Option<String>,
-    acp_args: Option<String>,
-}
-
-impl Cli {
-    fn parse() -> Self {
-        let mut cli = Self {
-            login: false,
-            agent: "codex".to_string(),
-            account_id: None,
-            acp_command: None,
-            acp_args: None,
-        };
-
-        let mut args = std::env::args().skip(1).peekable();
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "login" | "--login" => cli.login = true,
-                "--agent" => {
-                    if let Some(v) = args.next() {
-                        cli.agent = v;
-                    }
-                }
-                "--account" => {
-                    if let Some(v) = args.next() {
-                        cli.account_id = Some(v);
-                    }
-                }
-                "--acp-command" => {
-                    if let Some(v) = args.next() {
-                        cli.acp_command = Some(v);
-                    }
-                }
-                "--acp-args" => {
-                    if let Some(v) = args.next() {
-                        cli.acp_args = Some(v);
-                    }
-                }
-                "-h" | "--help" => print_help_and_exit(),
-                _ => {}
-            }
-        }
-        cli
-    }
-}
-
-fn print_help_and_exit() -> ! {
-    println!(
-        "wechat-agent\n\nUSAGE:\n  wechat-agent [login|--login] [--agent <name>] [--account <id>] [--acp-command <cmd>] [--acp-args \"...\"]\n\nAGENTS:\n  claude | codex | openclaw | acp | openai | anthropic | echo\n\nEXAMPLES:\n  wechat-agent --login --agent codex\n  wechat-agent --agent claude --account <account_id>\n  OPENAI_API_KEY=... wechat-agent --agent openai\n"
-    );
-    std::process::exit(0);
-}
-
-fn acp_preset(agent: &str) -> (String, Vec<String>) {
-    match agent {
-        "claude" => (
-            "npx".to_string(),
-            vec!["-y".to_string(), "@zed-industries/claude-agent-acp".to_string()],
-        ),
-        "codex" => (
-            "npx".to_string(),
-            vec!["-y".to_string(), "@zed-industries/codex-acp".to_string()],
-        ),
-        "openclaw" => ("openclaw".to_string(), vec!["acp".to_string()]),
-        _ => (
-            std::env::var("ACP_COMMAND").unwrap_or_else(|_| "npx".to_string()),
-            std::env::var("ACP_ARGS")
-                .map(|v| v.split_whitespace().map(|s| s.to_string()).collect())
-                .unwrap_or_else(|_| vec!["-y".to_string(), "@zed-industries/codex-acp".to_string()]),
-        ),
-    }
-}
+use sysinfo::{Pid, ProcessesToUpdate, Signal, System};
+use wechat_rs_sdk::auth::accounts::{delete_account, list_accounts};
+use wechat_rs_sdk::runtime::SpaceAgentRouter;
+use wechat_rs_sdk::space::{
+    available_agents, clear_space_pid, create_space, delete_space, ensure_space_runtime_dirs, inspect_space,
+    list_spaces, load_space, read_space_pid, remove_user_binding, set_space_account, set_user_binding,
+    space_log_path, switch_space_agent, write_space_pid,
+};
+use wechat_rs_sdk::storage::state_dir::resolve_state_dir;
+use wechat_rs_sdk::{Bot, LoginOptions, Result, StartOptions, WechatError};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").with_target(false).init();
 
-    let cli = Cli::parse();
-
-    let mut start_account_id = cli.account_id.clone();
-    if cli.login {
-        let id = Bot::login(LoginOptions::default()).await?;
-        println!("login success: {id}");
-        if start_account_id.is_none() {
-            start_account_id = Some(id);
-        }
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.is_empty() {
+        print_help();
+        return Ok(());
     }
 
-    let agent_name = cli.agent.to_lowercase();
-    let agent = match agent_name.as_str() {
-        "echo" => HubAgent::Echo(EchoAgent),
-        "openai" => {
-            let api_key = std::env::var("OPENAI_API_KEY")
-                .map_err(|_| wechat_rs_sdk::WechatError::Api("OPENAI_API_KEY is required".to_string()))?;
-            let base_url = std::env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com".to_string());
-            let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5.4".to_string());
-            let system_prompt = std::env::var("SYSTEM_PROMPT").ok();
-
-            HubAgent::OpenAI(OpenAIAgent {
-                client: reqwest::Client::new(),
-                api_key,
-                base_url,
-                model,
-                system_prompt,
-                history: Arc::new(Mutex::new(HashMap::new())),
-            })
+    match args[0].as_str() {
+        "account" => handle_account(&args[1..]).await,
+        "space" => handle_space(&args[1..]).await,
+        "agent" => handle_agent(&args[1..]).await,
+        "bind" => handle_bind(&args[1..]).await,
+        "daemon" => handle_daemon(&args[1..]).await,
+        "run" => handle_run(&args[1..]).await,
+        "login" => {
+            let id = Bot::login(LoginOptions::default()).await?;
+            println!("login success: {id}");
+            Ok(())
         }
-        "anthropic" => {
-            let api_key = std::env::var("ANTHROPIC_API_KEY")
-                .map_err(|_| wechat_rs_sdk::WechatError::Api("ANTHROPIC_API_KEY is required".to_string()))?;
-            let base_url = std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| "https://api.anthropic.com".to_string());
-            let model = std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-4-20250514".to_string());
-            let system_prompt = std::env::var("SYSTEM_PROMPT").ok();
-
-            HubAgent::Anthropic(AnthropicAgent {
-                client: reqwest::Client::new(),
-                api_key,
-                base_url,
-                model,
-                system_prompt,
-                history: Arc::new(Mutex::new(HashMap::new())),
-            })
+        "-h" | "--help" | "help" => {
+            print_help();
+            Ok(())
         }
-        "claude" | "codex" | "openclaw" | "acp" => {
-            let (mut command, mut args) = acp_preset(&agent_name);
-            if let Some(c) = cli.acp_command.clone() {
-                command = c;
+        other => Err(WechatError::Api(format!("unknown command: {other}"))),
+    }
+}
+
+async fn handle_account(args: &[String]) -> Result<()> {
+    match args.first().map(String::as_str) {
+        Some("login") => {
+            let id = Bot::login(LoginOptions::default()).await?;
+            println!("account added: {id}");
+            Ok(())
+        }
+        Some("ls") => {
+            let accounts = list_accounts();
+            if accounts.is_empty() {
+                println!("no accounts");
+            } else {
+                for account in accounts {
+                    println!(
+                        "{}\ttoken={}\tuser_id={}\tsaved_at={}",
+                        account.account_id,
+                        if account.has_token { "yes" } else { "no" },
+                        account.user_id.unwrap_or_else(|| "-".to_string()),
+                        account.saved_at.unwrap_or_else(|| "-".to_string())
+                    );
+                }
             }
-            if let Some(a) = cli.acp_args.clone() {
-                args = a.split_whitespace().map(|s| s.to_string()).collect();
+            Ok(())
+        }
+        Some("rm") => {
+            let id = required_arg(args, 1, "account id")?;
+            delete_account(id)?;
+            println!("account removed: {id}");
+            Ok(())
+        }
+        _ => {
+            println!("usage: wechat-agent account <login|ls|rm>");
+            Ok(())
+        }
+    }
+}
+
+async fn handle_space(args: &[String]) -> Result<()> {
+    match args.first().map(String::as_str) {
+        Some("create") => {
+            let name = required_arg(args, 1, "space name")?;
+            let agent = option_value(args, "--agent").unwrap_or_else(|| "codex".to_string());
+            let account = option_value(args, "--account");
+            let space = create_space(name, &agent, account)?;
+            println!(
+                "space created: {}\tagent={}\taccount={}",
+                space.name,
+                space.agent,
+                space.account_id.unwrap_or_else(|| "-".to_string())
+            );
+            Ok(())
+        }
+        Some("ls") => {
+            let spaces = list_spaces()?;
+            if spaces.is_empty() {
+                println!("no spaces");
+            } else {
+                for space in spaces {
+                    print_space_row(
+                        &space.name,
+                        &space.agent,
+                        space.account_id.as_deref(),
+                        space.binding_count,
+                    );
+                }
             }
-
-            println!("starting ACP agent: {} {}", command, args.join(" "));
-
-            HubAgent::Acp(
-                AcpAgent::new(AcpAgentOptions {
-                    command,
-                    args,
-                    cwd: None,
-                    env: HashMap::new(),
-                    prompt_timeout: Duration::from_secs(180),
-                })
-                .await?,
-            )
+            Ok(())
         }
-        other => {
-            return Err(wechat_rs_sdk::WechatError::Api(format!(
-                "unsupported --agent: {} (supported: claude|codex|openclaw|acp|openai|anthropic|echo)",
-                other
-            )));
+        Some("ps") => {
+            let spaces = list_spaces()?;
+            if spaces.is_empty() {
+                println!("no spaces");
+            } else {
+                for space in spaces {
+                    print_space_row(
+                        &space.name,
+                        &space.agent,
+                        space.account_id.as_deref(),
+                        space.binding_count,
+                    );
+                }
+            }
+            Ok(())
         }
+        Some("inspect") => {
+            let name = required_arg(args, 1, "space name")?;
+            let space = inspect_space(name)?;
+            println!("{}", serde_json::to_string_pretty(&space)?);
+            Ok(())
+        }
+        Some("start") => {
+            let name = required_arg(args, 1, "space name")?;
+            start_space(name)?;
+            Ok(())
+        }
+        Some("stop") => {
+            let name = required_arg(args, 1, "space name")?;
+            stop_space(name)?;
+            Ok(())
+        }
+        Some("restart") => {
+            let name = required_arg(args, 1, "space name")?;
+            restart_space(name)?;
+            Ok(())
+        }
+        Some("logs") => {
+            let name = required_arg(args, 1, "space name")?;
+            let follow = args.iter().any(|arg| arg == "-f" || arg == "--follow");
+            let tail = option_value(args, "--tail")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(80);
+            show_logs(name, tail, follow)?;
+            Ok(())
+        }
+        Some("rm") => {
+            let name = required_arg(args, 1, "space name")?;
+            if is_space_running(name) {
+                return Err(WechatError::Api(format!("space is running, stop it first: {name}")));
+            }
+            delete_space(name)?;
+            println!("space removed: {name}");
+            Ok(())
+        }
+        Some("bind-account") => {
+            let name = required_arg(args, 1, "space name")?;
+            let account = required_arg(args, 2, "account id")?;
+            let space = set_space_account(name, Some(account.to_string()))?;
+            println!(
+                "space account bound: {}\taccount={}",
+                space.name,
+                space.account_id.unwrap_or_else(|| "-".to_string())
+            );
+            Ok(())
+        }
+        Some("unbind-account") => {
+            let name = required_arg(args, 1, "space name")?;
+            let space = set_space_account(name, None)?;
+            println!("space account cleared: {}", space.name);
+            Ok(())
+        }
+        _ => {
+            println!("usage: wechat-agent space <create|ls|ps|inspect|start|stop|restart|logs|rm|bind-account|unbind-account>");
+            Ok(())
+        }
+    }
+}
+
+async fn handle_agent(args: &[String]) -> Result<()> {
+    match args.first().map(String::as_str) {
+        Some("ls") => {
+            for agent in available_agents() {
+                println!("{agent}");
+            }
+            Ok(())
+        }
+        Some("switch") => {
+            let space = required_arg(args, 1, "space name")?;
+            let agent = required_arg(args, 2, "agent")?;
+            let space = switch_space_agent(space, agent)?;
+            println!("space agent switched: {}\tagent={}", space.name, space.agent);
+            Ok(())
+        }
+        _ => {
+            println!("usage: wechat-agent agent <ls|switch>");
+            Ok(())
+        }
+    }
+}
+
+async fn handle_bind(args: &[String]) -> Result<()> {
+    match args.first().map(String::as_str) {
+        Some("ls") => {
+            let space = load_space(required_arg(args, 1, "space name")?)?;
+            if space.user_bindings.is_empty() {
+                println!("no bindings");
+            } else {
+                for (user, agent) in space.user_bindings {
+                    println!("{user}\t{agent}");
+                }
+            }
+            Ok(())
+        }
+        Some("set") => {
+            let space = required_arg(args, 1, "space name")?;
+            let user = required_arg(args, 2, "user id")?;
+            let agent = required_arg(args, 3, "agent")?;
+            set_user_binding(space, user, agent)?;
+            println!("binding set: {space}\t{user}\t{agent}");
+            Ok(())
+        }
+        Some("rm") => {
+            let space = required_arg(args, 1, "space name")?;
+            let user = required_arg(args, 2, "user id")?;
+            remove_user_binding(space, user)?;
+            println!("binding removed: {space}\t{user}");
+            Ok(())
+        }
+        _ => {
+            println!("usage: wechat-agent bind <ls|set|rm>");
+            Ok(())
+        }
+    }
+}
+
+async fn handle_daemon(args: &[String]) -> Result<()> {
+    match args.first().map(String::as_str) {
+        Some("start") => {
+            start_daemon()?;
+            Ok(())
+        }
+        Some("status") => {
+            let pid = daemon_pid();
+            println!(
+                "daemon\tpid={}\trunning={}\tlog={}",
+                pid.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                if daemon_running() { "yes" } else { "no" },
+                daemon_log_path().to_string_lossy()
+            );
+            Ok(())
+        }
+        Some("stop") => {
+            stop_daemon()?;
+            Ok(())
+        }
+        Some("serve") => daemon_serve().await,
+        _ => {
+            println!("usage: wechat-agent daemon <start|status|stop>");
+            println!("note: daemon is experimental; normal usage does not require it");
+            Ok(())
+        }
+    }
+}
+
+async fn handle_run(args: &[String]) -> Result<()> {
+    let daemonized = args.iter().any(|arg| arg == "--daemonized");
+    let space_name = if args.first().map(String::as_str) == Some("--space") {
+        required_arg(args, 1, "space name")?
+    } else {
+        required_arg(args, 0, "space name")?
     };
 
+    let space = load_space(space_name)?;
+    let account_id = space
+        .account_id
+        .clone()
+        .ok_or_else(|| WechatError::Api(format!("space has no bound account: {}", space.name)))?;
+
+    let router = SpaceAgentRouter::new(&space).await?;
+    let _guard = SpacePidGuard::acquire(&space.name, daemonized)?;
+    println!(
+        "running space: {}\tagent={}\taccount={}",
+        space.name, space.agent, account_id
+    );
+
     Bot::start(
-        agent,
+        router,
         StartOptions {
-            account_id: start_account_id,
+            account_id: Some(account_id),
         },
     )
     .await
+}
+
+struct SpacePidGuard {
+    space_name: String,
+}
+
+impl SpacePidGuard {
+    fn acquire(space_name: &str, daemonized: bool) -> Result<Self> {
+        let normalized = space_name.to_string();
+        if !daemonized && is_space_running(&normalized) {
+            return Err(WechatError::Api(format!("space already running: {normalized}")));
+        }
+        write_space_pid(&normalized, std::process::id())?;
+        Ok(Self { space_name: normalized })
+    }
+}
+
+impl Drop for SpacePidGuard {
+    fn drop(&mut self) {
+        let _ = clear_space_pid(&self.space_name);
+    }
+}
+
+fn start_space(name: &str) -> Result<()> {
+    let space = load_space(name)?;
+    if space.account_id.is_none() {
+        return Err(WechatError::Api(format!("space has no bound account: {}", space.name)));
+    }
+    if is_space_running(&space.name) {
+        println!("space already running: {}", space.name);
+        return Ok(());
+    }
+
+    ensure_space_runtime_dirs(&space.name)?;
+    let log_path = space_log_path(&space.name);
+    let log = OpenOptions::new().create(true).append(true).open(&log_path)?;
+    let log_err = log.try_clone()?;
+
+    let exe = std::env::current_exe()?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(["run", "--space", &space.name, "--daemonized"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err));
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+    }
+
+    let child = cmd.spawn()?;
+    write_space_pid(&space.name, child.id())?;
+    println!(
+        "space started: {}\tpid={}\tlog={}",
+        space.name,
+        child.id(),
+        log_path.to_string_lossy()
+    );
+    Ok(())
+}
+
+fn stop_space(name: &str) -> Result<()> {
+    let normalized = load_space(name)?.name;
+    let pid = match read_space_pid(&normalized) {
+        Some(pid) => pid,
+        None => {
+            println!("space not running: {normalized}");
+            return Ok(());
+        }
+    };
+
+    let mut system = System::new_all();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    if let Some(process) = system.process(Pid::from_u32(pid)) {
+        let _ = process.kill_with(Signal::Term);
+        let _ = process.kill();
+    }
+    clear_space_pid(&normalized)?;
+    println!("space stopped: {normalized}");
+    Ok(())
+}
+
+fn restart_space(name: &str) -> Result<()> {
+    if is_space_running(name) {
+        stop_space(name)?;
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    start_space(name)
+}
+
+fn show_logs(name: &str, tail_lines: usize, follow: bool) -> Result<()> {
+    let normalized = load_space(name)?.name;
+    let path = space_log_path(&normalized);
+    if !path.exists() {
+        println!("no logs: {}", path.to_string_lossy());
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&path)?;
+    let lines = content.lines().collect::<Vec<_>>();
+    let start = lines.len().saturating_sub(tail_lines);
+    for line in &lines[start..] {
+        println!("{line}");
+    }
+
+    if follow {
+        let mut file = OpenOptions::new().read(true).open(&path)?;
+        let mut pos = file.seek(SeekFrom::End(0))?;
+        loop {
+            std::thread::sleep(Duration::from_millis(1000));
+            let len = file.metadata()?.len();
+            if len < pos {
+                pos = 0;
+            }
+            if len == pos {
+                continue;
+            }
+            file.seek(SeekFrom::Start(pos))?;
+            let mut buf = String::new();
+            file.read_to_string(&mut buf)?;
+            if !buf.is_empty() {
+                print!("{buf}");
+            }
+            pos = len;
+        }
+    }
+
+    Ok(())
+}
+
+fn is_space_running(name: &str) -> bool {
+    let Some(pid) = read_space_pid(name) else {
+        return false;
+    };
+    let mut system = System::new_all();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    system.process(Pid::from_u32(pid)).is_some()
+}
+
+fn daemon_root() -> PathBuf {
+    resolve_state_dir().join("wechat-agent")
+}
+
+fn daemon_pid_path() -> PathBuf {
+    daemon_root().join("daemon.pid")
+}
+
+fn daemon_log_path() -> PathBuf {
+    daemon_root().join("daemon.log")
+}
+
+fn daemon_pid() -> Option<u32> {
+    let raw = std::fs::read_to_string(daemon_pid_path()).ok()?;
+    raw.trim().parse::<u32>().ok()
+}
+
+fn daemon_running() -> bool {
+    let Some(pid) = daemon_pid() else {
+        return false;
+    };
+    let mut system = System::new_all();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    system.process(Pid::from_u32(pid)).is_some()
+}
+
+fn start_daemon() -> Result<()> {
+    if daemon_running() {
+        println!("daemon already running: pid={}", daemon_pid().unwrap_or_default());
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(daemon_root())?;
+    let log = OpenOptions::new().create(true).append(true).open(daemon_log_path())?;
+    let log_err = log.try_clone()?;
+    let exe = std::env::current_exe()?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(["daemon", "serve"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(log_err));
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+    }
+
+    let child = cmd.spawn()?;
+    std::fs::write(daemon_pid_path(), child.id().to_string())?;
+    println!(
+        "daemon started: pid={}\tlog={}",
+        child.id(),
+        daemon_log_path().to_string_lossy()
+    );
+    Ok(())
+}
+
+fn stop_daemon() -> Result<()> {
+    let Some(pid) = daemon_pid() else {
+        println!("daemon not running");
+        return Ok(());
+    };
+    let mut system = System::new_all();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    if let Some(process) = system.process(Pid::from_u32(pid)) {
+        let _ = process.kill_with(Signal::Term);
+        let _ = process.kill();
+    }
+    let path = daemon_pid_path();
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    println!("daemon stopped");
+    Ok(())
+}
+
+async fn daemon_serve() -> Result<()> {
+    std::fs::create_dir_all(daemon_root())?;
+    std::fs::write(daemon_pid_path(), std::process::id().to_string())?;
+    println!("daemon serving");
+    loop {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
+
+fn option_value(args: &[String], name: &str) -> Option<String> {
+    args.iter()
+        .position(|arg| arg == name)
+        .and_then(|idx| args.get(idx + 1))
+        .cloned()
+}
+
+fn required_arg<'a>(args: &'a [String], idx: usize, label: &str) -> Result<&'a str> {
+    args.get(idx)
+        .map(String::as_str)
+        .ok_or_else(|| WechatError::Api(format!("missing {label}")))
+}
+
+fn print_help() {
+    println!(
+        "wechat-agent\n\nUSAGE:\n  wechat-agent <command>\n\nCORE COMMANDS:\n  account login|ls|rm\n  space create|ls|inspect|start|stop|restart|logs|rm|bind-account|unbind-account\n  agent ls|switch\n  bind ls|set|rm\n\nLOW-LEVEL:\n  run --space <name>\n  daemon start|status|stop  (experimental)\n\nEXAMPLES:\n  wechat-agent account login\n  wechat-agent space create dev --agent codex\n  wechat-agent space bind-account dev my-wechat-bot\n  wechat-agent space start dev\n  wechat-agent space ls\n  wechat-agent space inspect dev\n  wechat-agent space logs dev --tail 100 -f\n"
+    );
+}
+
+fn print_space_row(name: &str, agent: &str, account: Option<&str>, bindings: usize) {
+    let pid = read_space_pid(name);
+    println!(
+        "{}\trunning={}\tpid={}\tagent={}\taccount={}\tbindings={}",
+        name,
+        if is_space_running(name) { "yes" } else { "no" },
+        pid.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+        agent,
+        account.unwrap_or("-"),
+        bindings
+    );
 }
