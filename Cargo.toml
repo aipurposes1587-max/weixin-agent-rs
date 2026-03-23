@@ -1,6 +1,6 @@
 [package]
 name = "wechat_rs_sdk"
-version = "0.1.0"
+version = "0.0.3"
 edition = "2024"
 description = "WeChat iLink bot Rust SDK with pluggable agent interface"
 license = "MIT"
