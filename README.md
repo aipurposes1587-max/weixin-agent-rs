@@ -31,13 +31,12 @@
 ### 3. 实用优雅的命令交互
 ![命令交互](./media/cool_cli_01.png)
 
-### 4. 实用优雅的命令交互（Space 管理）
 ![Space 管理](./media/cool_cli_02.png)
 
-### 5. 手机聊天体验（可控制 Claude/Codex/OpenClaw，后续将支持 NanoBot/PicoClaw）
+### 4. 手机聊天体验（可控制 Claude/Codex/OpenClaw，后续将支持 NanoBot/PicoClaw）
 ![手机聊天体验](./media/on_my_phone.png)
 
-### 6. 欢迎加入讨论群组
+### 5. 欢迎加入讨论群组
 ![群聊效果](./media/wechat_agent_group.JPG)
 
 ## 使用流程（先看这段）
